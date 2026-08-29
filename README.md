@@ -1,13 +1,34 @@
 # samacama-server
 
-Minimal HTTP server that serves a Satisfactory save file (`latest.sav`) with CORS headers for [satisfactory-calculator.com](https://satisfactory-calculator.com).
+Minimal HTTP server that proxies a Satisfactory save file (`latest.sav`) stored in a
+Backblaze B2 bucket, with CORS headers for [satisfactory-calculator.com](https://satisfactory-calculator.com).
+
+## Why B2 instead of committing the save to this repo
+
+Previously, a cron job on the dedicated server committed and pushed a fresh
+`latest.sav` to this repo every 15 minutes, which triggered a Render auto-deploy
+(full rebuild) each time — dozens of unnecessary rebuilds per day. Now the cron
+job uploads the save straight to a Backblaze B2 bucket, and this server fetches
+it from B2 on every request instead of reading a file baked into the deploy.
+This service only needs to be redeployed when its own code changes.
+
+The B2 bucket has a lifecycle rule that deletes hidden (overwritten) versions
+after 1 day, so repeated uploads of `latest.sav` don't grow storage unbounded
+while still giving a day of rollback history.
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `B2_KEY_ID` | Backblaze B2 application key ID (scoped to the save bucket only) |
+| `B2_APPLICATION_KEY` | Backblaze B2 application key secret |
+| `B2_BUCKET_NAME` | Name of the B2 bucket holding `latest.sav` |
+| `PORT` | Port to listen on (Render sets this automatically) |
 
 ## Run locally
 
 ```bash
-node server.js
-# or
-PORT=3000 node server.js
+B2_KEY_ID=... B2_APPLICATION_KEY=... B2_BUCKET_NAME=... node server.js
 ```
 
 Test that it works:
@@ -24,21 +45,14 @@ curl http://localhost:3000/
 | **Build Command** | `npm install` |
 | **Start Command** | `node server.js` |
 | **Environment** | Node |
-
-### Important: file freshness on Render
-
-`latest.sav` is read directly from the local filesystem on every request — it is **not** cached in memory. However, Render builds a snapshot of the repo at deploy time, so the file on disk reflects the commit at the moment of the last deploy, not subsequent pushes.
-
-**Recommended setup:** Enable **Auto-Deploy** in your Render service settings (Settings → Auto-Deploy → Yes). This way, every `git push` from the cron job on the dedicated server triggers a new Render deploy (~1–2 min build time), and the file is refreshed automatically every 15 minutes.
-
-If auto-deploy is not enabled, you must manually trigger a redeploy in the Render dashboard to pick up a newer save file.
+| **Auto-Deploy** | Not needed anymore — the save no longer lives in this repo, so a push here only happens when the server code itself changes. |
 
 ## Endpoints
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/` | Health check — returns `OK` |
-| GET | `/latest.sav` | Downloads the save file |
+| GET / HEAD | `/latest.sav` | Streams the save file, proxied from B2 |
 | OPTIONS | `*` | CORS preflight — returns 200 empty |
 
 ## Final endpoint URL
